@@ -11,94 +11,99 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Store credentials per room
+const roomCredentials = new Map();
+
+// 🚀 Define agent
 export default defineAgent({
   entry: async (ctx) => {
     const roomName = ctx.room.name;
     console.log(`🚀 Joining room: ${roomName}`);
 
-    // 🔌 Connect to LiveKit first
-    await ctx.connect();
-    console.log(`✅ Connected to LiveKit`);
+    let session = null;
+    let currentLLM = null;
 
-    // 🎤 Create AI session
-    const session = new voice.AgentSession({
-      llm: new google.realtime.RealtimeModel({
+    // Function to create LLM instance (no API key needed for Gemini - uses LiveKit Inference)
+    function createLLM() {
+      return new google.realtime.RealtimeModel({
         model: "gemini-2.0-flash-exp",
         voice: "Puck",
+        apiKey: undefined, // LiveKit Inference handles this automatically
         temperature: 0.7,
-      }),
-      turnHandling: {
-        interruptions: true,
-      },
+      });
+    }
+
+    // Create initial session
+    currentLLM = createLLM();
+    session = new voice.AgentSession({
+      llm: currentLLM,
+      turnHandling: { interruptions: true },
     });
 
-    // 🔗 Start session
     await session.start({
       agent: new MyAgent(),
       room: ctx.room,
     });
 
-    console.log(`🤖 Agent ready in room: ${roomName}`);
+    await ctx.connect();
+    console.log(`✅ Agent connected to room: ${roomName}`);
 
-    // 📩 Listen for frontend messages
+    // Listen for messages from frontend
     ctx.room.on("dataReceived", async (payload, participant) => {
       try {
         const text = new TextDecoder().decode(payload);
         const data = JSON.parse(text);
 
-        if (data.type === "message" && data.text) {
-          console.log(`📩 ${participant?.identity}: ${data.text}`);
-
-          const handle = session.generateReply({
-            instructions: `
-You are FalconGPT, a friendly and human-like AI voice assistant.
-
-Style:
-- Warm, natural, conversational
-- Not robotic
-- Slightly casual but clear
-- Keep responses short and engaging
-
-Always respond like you're speaking to a real person.
-
-User said:
-"${data.text}"
-
-Now respond naturally:
-`
+        // Handle credential update (store for reference, but agent doesn't need them for Gemini)
+        if (data.type === 'credentials') {
+          console.log(`🔑 Credentials received from ${participant?.identity}`);
+          roomCredentials.set(roomName, {
+            apiKey: data.apiKey,
+            apiSecret: data.apiSecret,
+            wsUrl: data.wsUrl
           });
+          
+          // Send confirmation
+          await ctx.room.localParticipant.publishData(
+            new TextEncoder().encode(JSON.stringify({ 
+              type: 'credential_status', 
+              status: 'ok',
+              message: 'Agent ready'
+            }))
+          );
+          return;
+        }
 
+        // Handle chat messages
+        if (data.type === 'message' && data.text && session) {
+          console.log(`📩 ${participant?.identity}: ${data.text}`);
+          const handle = session.generateReply({ instructions: data.text });
           await handle.waitForPlayout();
         }
 
       } catch (err) {
-        console.error("❌ Message error:", err);
+        console.error("❌ Error:", err);
       }
     });
 
-    // 📡 Notify frontend that agent is ready
+    // Send ready signal to frontend
     await ctx.room.localParticipant.publishData(
-      new TextEncoder().encode(JSON.stringify({
-        type: 'agent_ready',
-        status: 'ready'
+      new TextEncoder().encode(JSON.stringify({ 
+        type: 'agent_ready', 
+        status: 'ready',
+        message: 'Voice agent is ready to chat'
       }))
     );
 
-    // 👋 Initial greeting
+    // Auto greeting
     setTimeout(async () => {
       try {
-        const greet = session.generateReply({
-          instructions: `
-You are FalconGPT, a friendly AI voice assistant.
-
-Greet the user warmly and naturally.
-Introduce yourself briefly and ask how you can help.
-
-Keep it short and human-like.
-`
-        });
-
-        await greet.waitForPlayout();
+        if (session) {
+          const greet = session.generateReply({
+            instructions: "Hello! I'm your AI voice assistant. How can I help you today? Feel free to speak or type your message.",
+          });
+          await greet.waitForPlayout();
+        }
       } catch (err) {
         console.error("Greeting error:", err);
       }
@@ -109,14 +114,39 @@ Keep it short and human-like.
 // 🤖 Agent class
 class MyAgent {
   constructor() {
-    console.log("🤖 Agent initialized");
+    console.log("🤖 Agent initialized and ready");
   }
 }
 
-// 🚀 Run agent
+// 🧩 Run agent
 cli.runApp(
   new ServerOptions({
     agent: fileURLToPath(import.meta.url),
     agentName: 'falcon-gpt-agent',
   })
 );
+
+// 🔥 Keep process alive for Render (prevents idle shutdown)
+setInterval(() => {
+  console.log("🤖 Agent still alive...");
+}, 60000);
+
+// Handle process signals for graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully...');
+  process.exit(0);
+});
+
+// Log uncaught errors
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
