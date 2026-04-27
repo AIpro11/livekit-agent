@@ -1,0 +1,15 @@
+{
+  "name": "falcon-gpt-agent",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node agent.js",
+    "dev": "node --watch agent.js"
+  },
+  "dependencies": {
+    "@livekit/agents": "latest",
+    "@livekit/agents-plugin-google": "latest",
+    "dotenv": "^16.3.1",
+    "livekit-server-sdk": "^2.0.0"
+  }
+}
